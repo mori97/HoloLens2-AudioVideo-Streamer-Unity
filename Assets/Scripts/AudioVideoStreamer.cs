@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -7,6 +7,7 @@ using UnityEngine;
 #if ENABLE_WINMD_SUPPORT
 using System;
 using System.Threading.Tasks;
+using Windows.Graphics.Imaging;
 using Windows.Media;
 using Windows.Media.Audio;
 using Windows.Media.Capture;
@@ -29,6 +30,7 @@ unsafe interface IMemoryBufferByteAccess
 public class AudioVideoStreamer : MonoBehaviour
 {
     public string audioServiceName = "50001";
+    public string videoServiceName = "50002";
     public uint videoWidth = 960;
     public uint videoHeight = 540;
     public double frameRate = 15.0;
@@ -37,6 +39,9 @@ public class AudioVideoStreamer : MonoBehaviour
     private MediaFrameReader audioFrameReader;
     private StreamSocketListener audioSocketListener;
     private IOutputStream audioStream;
+    private MediaFrameReader videoFrameReader;
+    private StreamSocketListener videoSocketListener;
+    private IOutputStream videoStream;
 
     async Task Start()
     {
@@ -44,6 +49,9 @@ public class AudioVideoStreamer : MonoBehaviour
         audioSocketListener = new StreamSocketListener();
         audioSocketListener.ConnectionReceived += OnConnectionAudio;
         await audioSocketListener.BindServiceNameAsync(audioServiceName);
+        videoSocketListener = new StreamSocketListener();
+        videoSocketListener.ConnectionReceived += OnConnectionVideo;
+        await videoSocketListener.BindServiceNameAsync(videoServiceName);
 
         // Find a media source group which gives us webcam and microphone input streams
         var sourceGroups = await MediaFrameSourceGroup.FindAllAsync();
@@ -101,14 +109,54 @@ public class AudioVideoStreamer : MonoBehaviour
             return;
         }
         MediaFrameSource audioFrameSource = audioFrameSources.FirstOrDefault().Value;
+        var videoFrameSources = mediaCapture.FrameSources.Where(src => src.Value.Info.SourceKind == MediaFrameSourceKind.Color);
+        if (videoFrameSources.Count() == 0)
+        {
+            Debug.Log("No video source was found.");
+            return;
+        }
+        // MediaFrameSource videoFrameSource = videoFrameSources.FirstOrDefault().Value;
+        MediaFrameSource videoFrameSource = null;
+        MediaFrameFormat selectedFormat = null;
+        foreach (var kv in videoFrameSources)
+        {
+            MediaFrameSource source = kv.Value;
+            foreach (MediaFrameFormat format in source.SupportedFormats)
+            {
+                Debug.Log(format.VideoFormat.Width + " " + format.VideoFormat.Height + " " + format.FrameRate.Numerator + " " + format.FrameRate.Denominator);
+                if (format.VideoFormat.Width == videoWidth && format.VideoFormat.Height == videoHeight
+                    && format.FrameRate.Numerator == frameRate && format.FrameRate.Denominator == 1)
+                {
+                    videoFrameSource = source;
+                    selectedFormat = format;
+                }
+            }
+        }
+        if (selectedFormat != null)
+        {
+            await videoFrameSource.SetFormatAsync(selectedFormat);
+        }
+        else
+        {
+            Debug.Log("Cannot find a proper MediaFrameFormat.");
+            return;
+        }
 
         // Start streaming
         audioFrameReader = await mediaCapture.CreateFrameReaderAsync(audioFrameSource);
         audioFrameReader.FrameArrived += AudioFrameArrived;
-        var status = await audioFrameReader.StartAsync();
-        if (status != MediaFrameReaderStartStatus.Success)
+        videoFrameReader = await mediaCapture.CreateFrameReaderAsync(videoFrameSource);
+        videoFrameReader.FrameArrived += VideoFrameArrived;
+
+        var audioStartStatus = audioFrameReader.StartAsync();
+        var videoStartStatus = videoFrameReader.StartAsync();
+        if (await audioStartStatus != MediaFrameReaderStartStatus.Success)
         {
             Debug.Log("The audioFrameReader couldn't start.");
+        }
+        if (await videoStartStatus != MediaFrameReaderStartStatus.Success)
+        {
+            Debug.Log("The videoFrameReader couldn't start.");
         }
     }
 
@@ -167,13 +215,46 @@ public class AudioVideoStreamer : MonoBehaviour
         }
     }
 
+    private async void OnConnectionVideo(StreamSocketListener sender, StreamSocketListenerConnectionReceivedEventArgs args)
+    {
+        var streamSocket = args.Socket;
+        videoStream = streamSocket.OutputStream;
+        Debug.Log("Received Video Connection.");
+    }
+
+    private void VideoFrameArrived(MediaFrameReader sender, MediaFrameArrivedEventArgs args)
+    {
+        using (MediaFrameReference reference = sender.TryAcquireLatestFrame())
+        {
+            if (reference != null)
+            {
+                ProcessVideoFrame(reference.VideoMediaFrame);
+            }
+        }
+    }
+
+    private void ProcessVideoFrame(VideoMediaFrame videoMediaFrame)
+    {
+        float focalX = videoMediaFrame.CameraIntrinsics.FocalLength.X;
+        float focalY = videoMediaFrame.CameraIntrinsics.FocalLength.Y;
+        uint imageWidth = videoMediaFrame.CameraIntrinsics.ImageWidth;
+        uint imageHeight = videoMediaFrame.CameraIntrinsics.ImageHeight;
+        Debug.Log(focalX + " " + focalY + " " + imageWidth + " " + imageHeight);
+    }
+
     async Task OnDestroy()
     {
         await audioFrameReader.StopAsync();
+        await videoFrameReader.StopAsync();
+
         audioFrameReader.FrameArrived -= AudioFrameArrived;
-        mediaCapture.Dispose();
         audioStream.FlushAsync();
         audioStream.Dispose();
+        videoFrameReader.FrameArrived -= VideoFrameArrived;
+        videoStream.FlushAsync();
+        videoStream.Dispose();
+
+        mediaCapture.Dispose();
     }
 #endif
 }
