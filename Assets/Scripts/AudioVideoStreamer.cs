@@ -171,7 +171,7 @@ public class AudioVideoStreamer : MonoBehaviour
     {
         using (MediaFrameReference reference = sender.TryAcquireLatestFrame())
         {
-            if (reference != null)
+            if (reference != null && audioStream != null)
             {
                 ProcessAudioFrame(reference.AudioMediaFrame);
             }
@@ -226,7 +226,7 @@ public class AudioVideoStreamer : MonoBehaviour
     {
         using (MediaFrameReference reference = sender.TryAcquireLatestFrame())
         {
-            if (reference != null)
+            if (reference != null && videoStream != null)
             {
                 ProcessVideoFrame(reference.VideoMediaFrame);
             }
@@ -250,9 +250,11 @@ public class AudioVideoStreamer : MonoBehaviour
         audioFrameReader.FrameArrived -= AudioFrameArrived;
         audioStream.FlushAsync();
         audioStream.Dispose();
+        audioStream = null;
         videoFrameReader.FrameArrived -= VideoFrameArrived;
         videoStream.FlushAsync();
         videoStream.Dispose();
+        videoStream = null;
 
         mediaCapture.Dispose();
     }
