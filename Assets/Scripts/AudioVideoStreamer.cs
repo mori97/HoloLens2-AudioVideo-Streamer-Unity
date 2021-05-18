@@ -87,7 +87,9 @@ public class AudioVideoStreamer : MonoBehaviour
         var settings = new MediaCaptureInitializationSettings()
         {
             AudioProcessing = AudioProcessing.Raw,
+            MemoryPreference = MediaCaptureMemoryPreference.Cpu,
             RecordMediaDescription = selectedDescription,
+            SharingMode = MediaCaptureSharingMode.ExclusiveControl,
             SourceGroup = selectedSourceGroup,
             StreamingCaptureMode = StreamingCaptureMode.AudioAndVideo,
             VideoProfile = selectedVideoProfile,
@@ -123,13 +125,17 @@ public class AudioVideoStreamer : MonoBehaviour
             MediaFrameSource source = kv.Value;
             foreach (MediaFrameFormat format in source.SupportedFormats)
             {
-                Debug.Log(format.VideoFormat.Width + " " + format.VideoFormat.Height + " " + format.FrameRate.Numerator + " " + format.FrameRate.Denominator);
                 if (format.VideoFormat.Width == videoWidth && format.VideoFormat.Height == videoHeight
                     && format.FrameRate.Numerator == frameRate && format.FrameRate.Denominator == 1)
                 {
                     videoFrameSource = source;
                     selectedFormat = format;
+                    break;
                 }
+            }
+            if (videoFrameSource != null)
+            {
+                break;
             }
         }
         if (selectedFormat != null)
@@ -233,13 +239,41 @@ public class AudioVideoStreamer : MonoBehaviour
         }
     }
 
-    private void ProcessVideoFrame(VideoMediaFrame videoMediaFrame)
+    unsafe private void ProcessVideoFrame(VideoMediaFrame videoMediaFrame)
     {
         float focalX = videoMediaFrame.CameraIntrinsics.FocalLength.X;
         float focalY = videoMediaFrame.CameraIntrinsics.FocalLength.Y;
         uint imageWidth = videoMediaFrame.CameraIntrinsics.ImageWidth;
         uint imageHeight = videoMediaFrame.CameraIntrinsics.ImageHeight;
-        Debug.Log(focalX + " " + focalY + " " + imageWidth + " " + imageHeight);
+
+        SoftwareBitmap softwareBitmap = videoMediaFrame.SoftwareBitmap;
+        if (softwareBitmap.BitmapPixelFormat != BitmapPixelFormat.Nv12)
+        {
+            softwareBitmap = SoftwareBitmap.Convert(softwareBitmap, BitmapPixelFormat.Nv12);
+        }
+        BitmapBuffer bitmapBuffer = softwareBitmap.LockBuffer(BitmapBufferAccessMode.Read);
+        IMemoryBufferReference reference = bitmapBuffer.CreateReference();
+
+        byte[] buf = new byte[4 * 4 + imageWidth * imageHeight * 3 / 2];
+        fixed (byte* pBufByte = buf)
+        {
+            float* pBufFloat = (float*)pBufByte; 
+            uint* pBufUint = (uint*)pBufByte;
+            byte* dataInBytes;
+            uint capacityInBytes;
+            ((IMemoryBufferByteAccess)reference).GetBuffer(out dataInBytes, out capacityInBytes);
+
+            pBufFloat[0] = focalX;
+            pBufFloat[1] = focalY;
+            pBufUint[2] = imageWidth;
+            pBufUint[3] = imageHeight;
+            for (uint i = 0; i < imageWidth * imageHeight * 3 / 2; i++)
+            {
+                pBufByte[4 * 4 + i] = dataInBytes[i];
+            }
+        }
+
+        videoStream.WriteAsync(buf.AsBuffer());
     }
 
     async Task OnDestroy()
