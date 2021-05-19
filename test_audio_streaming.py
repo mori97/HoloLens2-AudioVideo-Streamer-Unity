@@ -1,5 +1,6 @@
 """A script to test the audio streamer.
 """
+import argparse
 import queue
 import socket
 import threading
@@ -7,9 +8,6 @@ import threading
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-
-PORT = 50001
-HOST = '192.168.0.107'
 
 
 def recv_nbytes(sock, n_bytes):
@@ -49,6 +47,7 @@ class AudioReceiver(object):
         """Start data receiving.
         """
         self.sock.connect((self.host, self.port))
+        print(f"Connected to {self.host}:{self.port}")
         threading.Thread(target=self._recv_frames).start()
 
     def _recv_frames(self):
@@ -124,7 +123,16 @@ class AudioPlotter(object):
 
 
 def main():
-    receiver = AudioReceiver(HOST, PORT)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("host",
+                        help="IP address of HoloLens2",
+                        type=str)
+    parser.add_argument("--port",
+                        help="Port number to be used",
+                        type=int, default=50001)
+    args = parser.parse_args()
+
+    receiver = AudioReceiver(args.host, args.port)
     plotter = AudioPlotter(receiver)
     receiver.start()
     plotter.start()
